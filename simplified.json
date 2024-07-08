@@ -9,11 +9,6 @@
     "DesktopDiscription": "Test Deployment with PowerShell",
     "ProfileDiskPath": "\\\\DC001\\RDSFarm1$",
     "RDSAccessGroup": "SG_RDP_Internal_Access@lab.local",
-    "CertPath": "C:\\rds\\Wildcard_Flashmob.pfx",
-    "CertPassword": "Password",
     "RDBrokerDNSInternalName": "rdsbroker",
-    "RDBrokerDNSInternalZone": "flashmob-saulgau.de",
-    "SQLServer": "DB001.lab.local",
-    "SQLDatabase": "RDSFarm1",
-    "DomainNetbios": "LAB"
+    "RDBrokerDNSInternalZone": "flashmob-saulgau.de"
 }
