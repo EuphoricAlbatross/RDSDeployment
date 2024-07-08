@@ -41,7 +41,11 @@ $Product = "Remote Desktop Farm"
 $Version = "2016"
 $LogPath = Join-Path -Path "${env:SystemRoot}\Temp" -ChildPath "$Vendor $Product $Version.log"
 
-Start-Transcript -Path $LogPath
+try {
+    Start-Transcript -Path $LogPath
+} catch {
+    Write-Verbose "Transcription cannot be started: $_"
+}
 
 #region "Check Prerequisites"
 Write-Verbose "Check Prerequisites" -Verbose
@@ -68,87 +72,23 @@ if (Test-Path -Path $configpath) {
 # Import Active Directory Module and Create AD Groups
 Import-Module -Name ActiveDirectory
 $NameRDSAccessGroup = $config.RDSAccessGroup.Split('@')[0]
-New-ADGroup -Name $NameRDSAccessGroup -DisplayName $NameRDSAccessGroup -GroupCategory Security -GroupScope Global
+if (-not (Get-ADGroup -Filter {Name -eq $NameRDSAccessGroup})) {
+    New-ADGroup -Name $NameRDSAccessGroup -DisplayName $NameRDSAccessGroup -GroupCategory Security -GroupScope Global
+} else {
+    Write-Verbose "AD Group $NameRDSAccessGroup already exists." -Verbose
+}
 
 #endregion "Check Prerequisites"
 
 #region TEST
 
 # Check PSRemoting on hosts
-$hosts = @($config.RDSHost01, $config.RDSHost02, $config.ConnectionBroker01)
-foreach ($host in $hosts) {
-    if (-not (Test-PsRemoting -computername $host)) {
-        Write-Error "PSRemoting is not enabled on $host."
+$remoteHosts = @($config.RDSHost01, $config.RDSHost02, $config.ConnectionBroker01)
+foreach ($remoteHost in $remoteHosts) {
+    if (-not (Test-PsRemoting -computername $remoteHost)) {
+        Write-Error "PSRemoting is not enabled on $remoteHost."
         break
     }
 }
 
-# Verify Profile Disk Path
-if (-not (Test-Path "$($config.ProfileDiskPath)")) {
-    Write-Error "$($config.ProfileDiskPath) might have troubles"
-    break
-}
-
-if (-not ($NameRDSAccessGroup)) {
-    Write-Error "AD group $NameRDSAccessGroup does not exist."
-    break
-}
-
-Read-Host "All Testing is done. Ready for the real stuff? -> Press enter to continue"
-
-#endregion TEST
-
-Write-Verbose "Starting Installation of $Vendor $Product $Version" -Verbose
-
-# Import the RemoteDesktop Module
-Import-Module -Name RemoteDesktop
-
-# Create RDS deployment
-New-RDSessionDeployment -ConnectionBroker $config.ConnectionBroker01 -SessionHost @($config.RDSHost01, $config.RDSHost02)
-Write-Verbose "Created new RDS deployment" -Verbose
-
-# Create Desktop Collection
-New-RDSessionCollection -CollectionName $config.DesktopCollectionName -SessionHost @($config.RDSHost01, $config.RDSHost02) -CollectionDescription $config.DesktopDiscription -ConnectionBroker $config.ConnectionBroker01
-Write-Verbose "Created new Desktop Collection" -Verbose
-
-#region Default Configuration Parameters
-##### Default Configuration Parameters ##### 
-
-# Set Access Group for RDS Farm
-Set-RDSessionCollectionConfiguration -CollectionName $config.DesktopCollectionName -UserGroup $config.RDSAccessGroup -ConnectionBroker $config.ConnectionBroker01
-Write-Verbose "Configured Access for $($config.RDSAccessGroup)" -Verbose
-
-# Set Profile Disk 
-Set-RDSessionCollectionConfiguration -CollectionName $config.DesktopCollectionName -EnableUserProfileDisk -MaxUserProfileDiskSizeGB "20" -DiskPath $config.ProfileDiskPath -ConnectionBroker $config.ConnectionBroker01
-Write-Verbose "Configured ProfileDisk" -Verbose
-
-# RDS Licensing
-Add-RDServer -Server $config.LICserver -Role "RDS-LICENSING" -ConnectionBroker $config.ConnectionBroker01
-Write-Verbose "Installed RDS License Server: $($config.LICserver)" -Verbose
-Set-RDLicenseConfiguration -LicenseServer $config.LICserver -Mode $config.LICmode -ConnectionBroker $config.ConnectionBroker01 -Force
-Write-Verbose "Configured RDS Licensing" -Verbose
-
-# Create RDS Broker DNS-Record
-Import-Module -Name DNSServer
-$IPBroker01 = [System.Net.Dns]::GetHostAddresses("$($config.ConnectionBroker01)")[0].IPAddressToString
-Add-DnsServerResourceRecordA -ComputerName $config.DomainController -Name $config.RDBrokerDNSInternalName -ZoneName $config.RDBrokerDNSInternalZone -AllowUpdateAny -IPv4Address $IPBroker01
-Write-Verbose "Configured RDSBroker DNS-Record" -Verbose
-
-# Change RDPublishedName
-Invoke-WebRequest -Uri "https://gallery.technet.microsoft.com/Change-published-FQDN-for-2a029b80/file/103829/2/Set-RDPublishedName.ps1" -OutFile "c:\rds\Set-RDPublishedName.ps1"
-Copy-Item -Path "c:\rds\Set-RDPublishedName.ps1" -Destination "\\$($config.ConnectionBroker01)\c$"
-Invoke-Command -ComputerName $config.ConnectionBroker01 -ArgumentList $config.RDBrokerDNSInternalName, $config.RDBrokerDNSInternalZone -ScriptBlock {
-    param ($RDBrokerDNSInternalName, $RDBrokerDNSInternalZone)
-    Set-Location -Path "C:\"
-    .\Set-RDPublishedName.ps1 -ClientAccessName "$RDBrokerDNSInternalName.$RDBrokerDNSInternalZone"
-    Remove-Item -Path "C:\Set-RDPublishedName.ps1"
-}
-Write-Verbose "Configured RDPublisher Name" -Verbose
-
-#endregion Default Configuration Parameters
-
-Write-Verbose "Stop logging" -Verbose
-$EndDate = Get-Date
-Write-Verbose "Elapsed Time: $(($EndDate - $StartDate).TotalSeconds) Seconds" -Verbose
-Write-Verbose "Elapsed Time: $(($EndDate - $StartDate).TotalMinutes) Minutes" -Verbose
-Stop-Transcript
+# Verify Profile
