@@ -1,0 +1,19 @@
+{
+    "ConnectionBroker01": "RDSBroker001.lab.local",
+    "RDSHost01": "RDSHost001.lab.local",
+    "RDSHost02": "RDSHost002.lab.local",
+    "LICserver": "RDSLic001.lab.local",
+    "LICmode": "PerUser",
+    "DomainController": "DC001.lab.local",
+    "DesktopCollectionName": "RDS Lab",
+    "DesktopDiscription": "Test Deployment with PowerShell",
+    "ProfileDiskPath": "\\\\DC001\\RDSFarm1$",
+    "RDSAccessGroup": "SG_RDP_Internal_Access@lab.local",
+    "CertPath": "C:\\rds\\Wildcard_Flashmob.pfx",
+    "CertPassword": "Password",
+    "RDBrokerDNSInternalName": "rdsbroker",
+    "RDBrokerDNSInternalZone": "flashmob-saulgau.de",
+    "SQLServer": "DB001.lab.local",
+    "SQLDatabase": "RDSFarm1",
+    "DomainNetbios": "LAB"
+}
