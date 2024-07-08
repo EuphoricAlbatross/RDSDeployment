@@ -65,14 +65,6 @@ if (Test-Path -Path $configpath) {
     break
 }
 
-# Check for SSL Certificate
-if (Test-Path -Path $config.CertPath) {
-    Write-Verbose "SSL Certificate was found." -Verbose
-} else {
-    Write-Error "Failed to find the SSL Certificate."
-    break
-}
-
 # Import Active Directory Module and Create AD Groups
 Import-Module -Name ActiveDirectory
 $NameRDSAccessGroup = $config.RDSAccessGroup.Split('@')[0]
@@ -135,14 +127,6 @@ Add-RDServer -Server $config.LICserver -Role "RDS-LICENSING" -ConnectionBroker $
 Write-Verbose "Installed RDS License Server: $($config.LICserver)" -Verbose
 Set-RDLicenseConfiguration -LicenseServer $config.LICserver -Mode $config.LICmode -ConnectionBroker $config.ConnectionBroker01 -Force
 Write-Verbose "Configured RDS Licensing" -Verbose
-
-# Set Certificates
-$Password = ConvertTo-SecureString -String $config.CertPassword -AsPlainText -Force 
-Set-RDCertificate -Role RDPublishing -ImportPath $config.CertPath -Password $Password -ConnectionBroker $config.ConnectionBroker01 -Force
-Set-RDCertificate -Role RDRedirector -ImportPath $config.CertPath -Password $Password -ConnectionBroker $config.ConnectionBroker01 -Force
-Set-RDCertificate -Role RDWebAccess -ImportPath $config.CertPath -Password $Password -ConnectionBroker $config.ConnectionBroker01 -Force
-Set-RDCertificate -Role RDGateway -ImportPath $config.CertPath -Password $Password -ConnectionBroker $config.ConnectionBroker01 -Force
-Write-Verbose "Configured SSL Certificates" -Verbose
 
 # Create RDS Broker DNS-Record
 Import-Module -Name DNSServer
