@@ -1,0 +1,225 @@
+<#
+DESCRIPTION   This script will create a configured Remote Desktop Session Farm.
+Author:         Julian Mooren | https://citrixguyblog.com
+Contributer:    Sander van Gelderen | https://www.van-gelderen.eu
+Updated by:     Jace Miller
+Update Date:    6/15/2024
+#>
+
+#Requires -version 4.0
+#Requires -RunAsAdministrator
+
+function Test-PsRemoting {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$computername
+    )
+   
+    try {
+        $errorActionPreference = "Stop"
+        $result = Invoke-Command -ComputerName $computername { 1 }
+    }
+    catch {
+        Write-Verbose $_
+        return $false
+    }
+   
+    if ($result -ne 1) {
+        Write-Verbose "Remoting to $computerName returned an unexpected result."
+        return $false
+    }
+   
+    $true   
+}
+
+function Prompt-ForBoolean {
+    param(
+        [string]$prompt
+    )
+    $response = Read-Host "$prompt (y/n)"
+    return $response -eq 'y'
+}
+
+function Prompt-ForNames {
+    param(
+        [string]$prompt,
+        [int]$count
+    )
+    $names = @()
+    for ($i = 1; $i -le $count; $i++) {
+        $name = Read-Host "$prompt $i"
+        $names += $name
+    }
+    return $names
+}
+
+# Gather Inputs
+$MultiDeployment = Prompt-ForBoolean -prompt "Is this a MultiDeployment?"
+$HADeployment = Prompt-ForBoolean -prompt "Is this a HADeployment?"
+
+$numberOfConnectionBrokers = Read-Host "Number of Connection Brokers"
+$ConnectionBrokers = Prompt-ForNames -prompt "Enter Connection Broker name" -count $numberOfConnectionBrokers
+
+$WebAccessInUse = Prompt-ForBoolean -prompt "Is WebAccess in use?"
+if ($WebAccessInUse) {
+    $numberOfWebAccessServers = Read-Host "Number of Web Access Servers"
+    $WebAccessServers = Prompt-ForNames -prompt "Enter Web Access Server name" -count $numberOfWebAccessServers
+} else {
+    $WebAccessServers = @()
+}
+
+$RDGatewayInUse = Prompt-ForBoolean -prompt "Is RDGateway in use?"
+if ($RDGatewayInUse) {
+    $numberOfRDGatewayServers = Read-Host "Number of RD Gateway Servers"
+    $RDGatewayServers = Prompt-ForNames -prompt "Enter RD Gateway Server name" -count $numberOfRDGatewayServers
+} else {
+    $RDGatewayServers = @()
+}
+
+$numberOfRDSHosts = Read-Host "Number of RDS Hosts"
+$RDSHosts = Prompt-ForNames -prompt "Enter RDS Host name" -count $numberOfRDSHosts
+
+$LICServer = Read-Host "Enter the LIC Server name"
+$LICMode = Read-Host "Enter the LIC mode"
+
+$Domain = Read-Host "Enter the Domain"
+$DomainController = Read-Host "Enter the preferred Domain Controller"
+
+# Start Logging
+$StartDate = (Get-Date)
+$Vendor = "Microsoft"
+$Product = "Remote Desktop Farm"
+$Version = "2016"
+$LogPath = "${env:SystemRoot}\Temp\$Vendor $Product $Version.log"
+Start-Transcript $LogPath
+
+#region "Check Prerequisites"
+Write-Verbose "Check Prerequisites" -Verbose
+
+if (Get-WindowsFeature -Name RSAT-AD-Tools, RSAT-DNS-Server) {
+    Write-Verbose "Needed PowerShell Modules available." -Verbose
+} else {    
+    Write-Verbose "Needed PowerShell Modules will be installed." -Verbose
+    Install-WindowsFeature RSAT-AD-Tools, RSAT-DNS-Server
+    Write-Verbose "Needed PowerShell Modules have been installed." -Verbose
+}
+
+Import-Module Activedirectory
+
+# Here you should have logic to create AD groups or any other prerequisites
+
+#endregion "Check Prerequisites"
+
+#region TEST
+if ($MultiDeployment) {
+    if ($RDSHosts + $ConnectionBrokers + $WebAccessServers + $RDGatewayServers | ForEach-Object { Test-PsRemoting -computername $_ }) {
+        Write-Verbose "PSRemoting is enabled on all Hosts. MultiDeployment GO GO GO!" -Verbose
+    } else {
+        Write-Warning "PSRemoting is not enabled on all Hosts. MultiDeployment is not ready!"
+        break
+    }
+
+    # Additional MultiDeployment logic
+}
+
+if ($HADeployment) {
+    if ($RDSHosts + $ConnectionBrokers + $WebAccessServers + $RDGatewayServers | ForEach-Object { Test-PsRemoting -computername $_ }) {
+        Write-Verbose "PSRemoting is enabled on all Hosts." -Verbose
+    } else {
+        Write-Warning "PSRemoting is not enabled on all Hosts." -Verbose
+        break
+    }
+
+    # Additional HADeployment logic
+}
+
+read-host "All Testing is done. Ready for the real stuff? -> Press enter to continue"
+
+#endregion TEST
+
+Write-Verbose "Starting Installation of $Vendor $Product $Version" -Verbose
+
+# Import the RemoteDesktop Module
+Import-Module RemoteDesktop
+
+##### MultiDeployment Configuration Parameters ##### 
+
+if ($MultiDeployment) {
+    # Create RDS deployment
+    New-RDSessionDeployment -ConnectionBroker $ConnectionBrokers[0] -WebAccessServer $WebAccessServers[0] -SessionHost $RDSHosts
+    Write-Verbose "Created new RDS deployment" -Verbose
+
+    # Create Desktop Collection
+    New-RDSessionCollection -CollectionName "DesktopCollection" -SessionHost $RDSHosts -CollectionDescription "Desktop Collection" -ConnectionBroker $ConnectionBrokers[0]
+    Write-Verbose "Created new Desktop Collection" -Verbose
+
+    # Install Gateway
+    if ($RDGatewayInUse) {
+        Add-WindowsFeature -Name RDS-Gateway -IncludeManagementTools -ComputerName $RDGatewayServers[0]
+        Write-Verbose "Installed RDS Gateway" -Verbose
+
+        # Join Gateway to Broker
+        Add-RDServer -Server $RDGatewayServers[0] -Role "RDS-GATEWAY" -ConnectionBroker $ConnectionBrokers[0] -GatewayExternalFqdn "gateway.example.com"
+        Write-Verbose "Joined RDS Gateway to Broker" -Verbose
+    }
+
+    # Configure GW Policies on RDGatewayServer01
+    if ($RDGatewayInUse) {
+        Invoke-Command -ComputerName $RDGatewayServers[0] -ArgumentList "AccessGroup", "RDBrokerDNSInternalName", "RDBrokerDNSInternalZone", $RDSHosts -ScriptBlock {
+            param ($GatewayAccessGroup, $RDBrokerDNSInternalName, $RDBrokerDNSInternalZone, $RDSHosts)
+            Import-Module RemoteDesktopServices
+            Remove-Item -Path "RDS:\GatewayServer\CAP\RDG_CAP_AllUsers" -Force -Recurse
+            Remove-Item -Path "RDS:\GatewayServer\RAP\RDG_RDConnectionBrokers" -Force -Recurse
+            Remove-Item -Path "RDS:\GatewayServer\RAP\RDG_AllDomainComputers" -Force -Recurse
+            Remove-Item -Path "RDS:\GatewayServer\GatewayManagedComputerGroups\RDG_RDCBComputers" -Force -Recurse
+            New-Item -Path "RDS:\GatewayServer\GatewayManagedComputerGroups" -Name "RDSFarm1" -Description "RDSFarm1" -Computers "$RDBrokerDNSInternalName.$RDBrokerDNSInternalZone" -ItemType "String"
+            $RDSHosts | ForEach-Object { New-Item -Path "RDS:\GatewayServer\GatewayManagedComputerGroups\RDSFarm1\Computers" -Name $_ -ItemType "String" }
+            New-Item -Path "RDS:\GatewayServer\RAP" -Name "RDG_RAP_RDSFarm1" -UserGroups $GatewayAccessGroup -ComputerGroupType 0 -ComputerGroup "RDSFarm1"
+            New-Item -Path "RDS:\GatewayServer\CAP" -Name "RDG_CAP_RDSFarm1" -UserGroups $GatewayAccessGroup -AuthMethod 1
+        }
+        Write-Verbose "Configured CAP & RAP Policies on: $($RDGatewayServers[0])" -Verbose
+    }
+
+    # Additional configuration logic for MultiDeployment
+}
+
+#region Default Configuration Parameters
+##### Default Configuration Parameters ##### 
+
+# Set Access Group for RDS Farm
+Set-RDSessionCollectionConfiguration -CollectionName "DesktopCollection" -UserGroup "RDSAccessGroup" -ConnectionBroker $ConnectionBrokers[0]
+Write-Verbose "Configured Access for RDSAccessGroup" -Verbose
+
+# Set Profile Disk 
+Set-RDSessionCollectionConfiguration -CollectionName "DesktopCollection" -EnableUserProfileDisk -MaxUserProfileDiskSizeGB 20 -DiskPath "C:\ProfileDisks" -ConnectionBroker $ConnectionBrokers[0]
+Write-Verbose "Configured ProfileDisk" -Verbose
+
+# RDS Licensing
+Add-RDServer -Server $LICServer -Role "RDS-LICENSING" -ConnectionBroker $ConnectionBrokers[0]
+Write-Verbose "Installed RDS License Server: $LICServer" -Verbose
+Set-RDLicenseConfiguration -LicenseServer $LICServer -Mode $LICMode -ConnectionBroker $ConnectionBrokers[0] -Force
+Write-Verbose "Configured RDS Licensing" -Verbose
+
+# Set Certificates
+$Password = ConvertTo-SecureString -String "CertPassword" -AsPlainText -Force 
+Set-RDCertificate -Role RDPublishing -ImportPath "C:\CertPath" -Password $Password -ConnectionBroker $ConnectionBrokers[0] -Force
+Set-RDCertificate -Role RDRedirector -ImportPath "C:\CertPath" -Password $Password -ConnectionBroker $ConnectionBrokers[0] -Force
+Set-RDCertificate -Role RDWebAccess -ImportPath "C:\CertPath" -Password $Password -ConnectionBroker $ConnectionBrokers[0] -Force
+Set-RDCertificate -Role RDGateway -ImportPath "C:\CertPath" -Password $Password -ConnectionBroker $ConnectionBrokers[0] -Force
+Write-Verbose "Configured SSL Certificates" -Verbose
+
+# Additional default configuration logic
+
+#endregion Default Configuration Parameters
+
+##### HA Configuration Configuration Parameters ##### 
+
+if ($HADeployment) {
+    # HA Deployment logic
+}
+
+Write-Verbose "Stop logging" -Verbose
+$EndDate = (Get-Date)
+Write-Verbose "Elapsed Time: $(($EndDate-$StartDate).TotalSeconds) Seconds" -Verbose
+Write-Verbose "Elapsed Time: $(($EndDate-$StartDate).TotalMinutes) Minutes" -Verbose
+Stop-Transcript
